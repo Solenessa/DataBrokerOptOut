@@ -15,7 +15,7 @@ load_dotenv()  # put BING_API_KEY in .env if using Bing Web Search API
 USER_AGENT = "Mozilla/5.0 (compatible; OptOutFinder/1.0; +https://yourdomain.example)"
 RATE_LIMIT_SECONDS = 1.0
 SEARCH_API = os.getenv("BING_API_KEY")  # optional - recommended
-SEED_LIST_FILES = ["seed_brokers.txt"]  # start with curated list (one domain per line)
+SEED_LIST_FILES = ["DataBrokerOptOut/seed_brokers.txt"]  # start with curated list (one domain per line)
 OUTPUT = "found_optouts.json"
 
 KEYWORD_RE = re.compile(r"(opt[- ]?out|data[- ]?remov|do[- ]?not[- ]?sell|privacy request|delete my data|subject access request)", re.I)
