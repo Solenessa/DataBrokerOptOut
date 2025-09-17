@@ -1,42 +1,114 @@
-import webbrowser
+# discover_optouts.py
+# Requires: pip install requests beautifulsoup4 python-dotenv
+# Optional: playwright for JS-rendered pages
 
-def print_header():
-    print("*******************************************")
-    print("*            Data Broker Opt Out           *")
-    print("*******************************************")
+import os, time, json, re
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
+import urllib.robotparser
+from dotenv import load_dotenv
 
-data_brokers = [
-    "Acxiom",
-    "Equifax",
-    "Oracle",
-    "Epsilon",
-    "TransUnion"
-]
+load_dotenv()  # put BING_API_KEY in .env if using Bing Web Search API
 
-def open_opt_out_page(broker_name):
-    opt_out_urls = {
-        "Acxiom": "https://www.acxiom.com/about-us/privacy/opt-out/",
-        "Equifax": "https://www.equifax.com/personal/credit-report-services/credit-freeze/",
-        "Oracle": "https://www.oracle.com/legal/privacy/privacy-policy.html#optout",
-        "Epsilon": "https://us.epsilon.com/privacy-policy#optout",
-        "TransUnion": "https://www.transunion.com/credit-freeze/place-credit-freeze"
-    }
+# --- CONFIG ---
+USER_AGENT = "Mozilla/5.0 (compatible; OptOutFinder/1.0; +https://yourdomain.example)"
+RATE_LIMIT_SECONDS = 1.0
+SEARCH_API = os.getenv("BING_API_KEY")  # optional - recommended
+SEED_LIST_FILES = ["seed_brokers.txt"]  # start with curated list (one domain per line)
+OUTPUT = "found_optouts.json"
 
-    url = opt_out_urls.get(broker_name)
-    if url:
-        print(f"\nOpening opt-out page for {broker_name}...")
-        webbrowser.open(url, new=2)  # Open in a new tab/window
-    else:
-        print(f"\nOpt-out information not available for {broker_name}.")
+KEYWORD_RE = re.compile(r"(opt[- ]?out|data[- ]?remov|do[- ]?not[- ]?sell|privacy request|delete my data|subject access request)", re.I)
+# ----------------
+
+session = requests.Session()
+session.headers.update({"User-Agent": USER_AGENT})
+
+def robots_allows(url):
+    parsed = urlparse(url)
+    rp = urllib.robotparser.RobotFileParser()
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+    try:
+        rp.set_url(robots_url)
+        rp.read()
+        return rp.can_fetch(USER_AGENT, url)
+    except Exception:
+        # If robots.txt missing, be conservative and allow
+        return True
+
+def simple_fetch(url, allow_js=False, timeout=15):
+    if not robots_allows(url):
+        print(f"[robots] Denied: {url}")
+        return None
+    try:
+        r = session.get(url, timeout=timeout)
+        time.sleep(RATE_LIMIT_SECONDS)
+        if r.status_code != 200:
+            return None
+        return r.text
+    except Exception as e:
+        print("fetch error", e)
+        return None
+
+def find_optout_in_html(html, base_url):
+    soup = BeautifulSoup(html, "html.parser")
+    matches = []
+    # search <a> tags
+    for a in soup.find_all("a", href=True):
+        txt = (a.get_text(" ", strip=True) or "") + " " + a['href']
+        if KEYWORD_RE.search(txt):
+            matches.append(urljoin(base_url, a['href']))
+    # search page body for contact forms or keywords
+    if KEYWORD_RE.search(soup.get_text(" ", strip=True)):
+        matches.append(base_url)
+    return list(dict.fromkeys(matches))
+
+def discover_from_seed(domain):
+    print("seed:", domain)
+    root = domain if domain.startswith("http") else f"https://{domain}"
+    # check common paths quickly
+    candidates = ["/privacy", "/privacy-policy", "/optout", "/do-not-sell", "/data-removal", "/privacy/opt-out", "/privacy/rights"]
+    found = []
+    for p in candidates:
+        url = urljoin(root, p)
+        html = simple_fetch(url)
+        if not html:
+            continue
+        matches = find_optout_in_html(html, url)
+        if matches:
+            found.extend(matches)
+    # else: fetch homepage and search anchors
+    home = simple_fetch(root)
+    if home:
+        found.extend(find_optout_in_html(home, root))
+    return list(dict.fromkeys(found))
+
+def search_engine_query(query, count=10):
+    # Placeholder: implement with Bing Web Search API for reliability.
+    # Fallback: use duckduckgo HTML search (less reliable).
+    # This function should return a list of result URLs.
+    raise NotImplementedError("Wire your preferred search API (Bing/DuckDuckGo).")
+
+def main():
+    results = {}
+    # 1) Load seed list
+    seeds = []
+    for f in SEED_LIST_FILES:
+        if os.path.exists(f):
+            with open(f) as fh:
+                seeds.extend([line.strip() for line in fh if line.strip()])
+    # 2) Discover candidate pages from seeds
+    for s in seeds:
+        try:
+            found = discover_from_seed(s)
+            if found:
+                results[s] = found
+        except Exception as e:
+            print("ERROR!:", e)
+    # 3) Save result
+    with open(OUTPUT, "w") as fh:
+        json.dump(results, fh, indent=2)
+    print("saved", OUTPUT)
 
 if __name__ == "__main__":
-    print_header()
-    
-    broker_to_remove = "TowerData"
-    if broker_to_remove in data_brokers:
-        data_brokers.remove(broker_to_remove)
-        print(f"Removed {broker_to_remove} from the list.")
-    
-    for broker in data_brokers:
-        open_opt_out_page(broker)
-
+    main()
